@@ -1,12 +1,22 @@
-"""Rol A: normalización y estandarización de registros.
+# Rol A: normalización y estandarización de registros.
 
-SEMANA 10: implementar las funciones marcadas TODO.
-Contrato: recibir un diccionario y devolver una COPIA normalizada.
-No modificar el registro original.
-"""
+# SEMANA 10: implementar las funciones marcadas TODO.
+# Contrato: recibir un diccionario y devolver una COPIA normalizada.
+# No modificar el registro original.
+
+
+
 def normalizar_registro(registro):
-    # TODO A-S10-01: validar que registro sea un diccionario.
-    # TODO A-S10-02: quitar espacios de id, tipo, unidad y valor textual.
-    # TODO A-S10-03: estandarizar tipo a minúsculas.
-    # TODO A-S10-04: devolver una copia; no convertir aún el valor a float aquí.
-    raise NotImplementedError("Pendiente: implementación del rol A, semana 10")
+    if not isinstance(registro, dict):
+        raise TypeError("El registro debe ser un diccionario.")
+
+    registro_normalizado = registro.copy()
+    for campo in ("id", "tipo", "unidad", "valor"):
+        valor = registro_normalizado.get(campo)
+        if isinstance(valor, str):
+            valor = valor.strip()
+            if campo == "tipo":
+                valor = valor.lower()
+            registro_normalizado[campo] = valor
+
+    return registro_normalizado
