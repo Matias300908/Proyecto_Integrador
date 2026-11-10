@@ -4,12 +4,48 @@ Semana 10–12: completar integración con validación y excepciones.
 La clasificación permanece centralizada en clasificacion.py.
 """
 from src.processing.clasificacion import clasificar_valor
+from src.processing.resumen import generar_resumen
+from src.exceptions.errores import crear_reporte_error
+from src.validation.normalizacion import normalizar_registro
+from src.validation.validaciones import validar_registro
+
 
 def procesar_registros(registros):
-    # TODO B-S10-01: coordinar normalización y validación sin duplicar reglas.
-    # TODO B-S10-02: clasificar únicamente registros válidos.
-    # TODO B-S10-03: devolver el contrato común definido en docs/contratos_modulos.md.
-    # TODO B-S11-04: aislar errores por registro y continuar el lote.
-    # TODO B-S12-04: integrar entradas de lectores CSV, JSON y Excel.
-    # La función clasificar_valor(valor, tipo) debe reutilizarse.
-    raise NotImplementedError("Pendiente: integración del procesamiento, semanas 10–12")
+    """Normaliza, valida y clasifica lotes de registros sin detener el flujo."""
+    resultado = {
+        "registros_validos": [],
+        "registros_invalidos": [],
+        "errores": [],
+        "resumen": {},
+    }
+
+    if registros is None:
+        return resultado
+
+    for registro in registros:
+        try:
+            registro_normalizado = normalizar_registro(registro)
+            es_valido, motivos = validar_registro(registro_normalizado)
+            if not es_valido:
+                resultado["registros_invalidos"].append({
+                    "registro": registro_normalizado,
+                    "motivos": motivos,
+                })
+                continue
+
+            valor = float(registro_normalizado["valor"])
+            registro_normalizado["valor"] = valor
+            registro_normalizado["clasificacion"] = clasificar_valor(valor, registro_normalizado["tipo"])
+            resultado["registros_validos"].append(registro_normalizado)
+        except Exception as exc:  # Aislar fallas técnicas de un registro sin abortar el lote.
+            identificador = registro.get("id") if isinstance(registro, dict) else None
+            resultado["errores"].append(
+                crear_reporte_error("PROCESAMIENTO", identificador, str(exc))
+            )
+            resultado["registros_invalidos"].append({
+                "registro": registro,
+                "motivos": [str(exc)],
+            })
+
+    resultado["resumen"] = generar_resumen(resultado["registros_validos"])
+    return resultado
