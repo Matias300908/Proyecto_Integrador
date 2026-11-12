@@ -3,9 +3,13 @@ from datetime import datetime
 import json
 
 
-# ==========================================
+# ==================================================
+# SEMANA 11
+# EXCEPCIONES, LECTURA Y CONVERSIÓN DE DATOS
+# ==================================================
+
+
 # 1. DEFINICIÓN DE EXCEPCIONES
-# ==========================================
 
 class DataLabError(Exception):
     """Excepción base de la aplicación."""
@@ -23,31 +27,24 @@ class ErrorLecturaFuente(DataLabError):
     """No fue posible leer una fuente de datos."""
 
 
-# ==========================================
-# 2. REPORTE DE ERRORES
-# ==========================================
-
-def crear_reporte_error(origen, identificador, mensaje,
-                        categoria="PROCESAMIENTO"):
-
-    return {
-        "origen": origen,
-        "identificador": identificador,
-        "mensaje": str(mensaje),
-        "categoria": str(categoria).strip().upper(),
-        "fecha_hora": datetime.now().astimezone().isoformat(),
-    }
-
-
-# ==========================================
-# 3. LECTURA DE LA FUENTE DE DATOS
-# ==========================================
+# 2. LECTURA CONTROLADA DE LA FUENTE
 
 def leer_fuente(ruta):
 
     try:
         with open(ruta, "r", encoding="utf-8") as archivo:
-            datos = json.load(archivo)
+            contenido = archivo.read()
+
+        if not contenido.strip():
+            raise ErrorFormatoFuente("El archivo está vacío.")
+
+        try:
+            datos = json.loads(contenido)
+
+        except json.JSONDecodeError as error:
+            raise ErrorFormatoFuente(
+                f"El archivo JSON tiene un formato incorrecto: {error}"
+            ) from error
 
         if not isinstance(datos, list):
             raise ErrorFormatoFuente(
@@ -61,9 +58,14 @@ def leer_fuente(ruta):
             f"No se encontró el archivo: {ruta}"
         ) from error
 
-    except json.JSONDecodeError as error:
-        raise ErrorFormatoFuente(
-            f"El archivo JSON tiene un formato incorrecto: {error}"
+    except PermissionError as error:
+        raise ErrorLecturaFuente(
+            "No hay permisos para leer el archivo."
+        ) from error
+
+    except UnicodeDecodeError as error:
+        raise ErrorLecturaFuente(
+            "El archivo tiene una codificación incorrecta."
         ) from error
 
     except OSError as error:
@@ -72,9 +74,7 @@ def leer_fuente(ruta):
         ) from error
 
 
-# ==========================================
-# 4. VALIDACIÓN DE CADA REGISTRO
-# ==========================================
+# 3. CONVERSIÓN Y VALIDACIÓN DE CADA REGISTRO
 
 def validar_registro(registro):
 
@@ -91,33 +91,86 @@ def validar_registro(registro):
                 f"Falta el campo obligatorio: {campo}"
             )
 
-    if not isinstance(registro["id"], int):
-        raise ErrorValidacion("El identificador debe ser entero.")
+    # Conversión de datos
+
+    try:
+        identificador = int(registro["id"])
+        edad = int(registro["edad"])
+
+    except (ValueError, TypeError) as error:
+        raise ErrorValidacion(
+            f"Error al convertir los datos: {error}"
+        ) from error
+
+    # Validación de identificador
+
+    if identificador <= 0:
+        raise ErrorValidacion(
+            "El identificador debe ser positivo."
+        )
+
+    # Validación de edad
+
+    if edad < 0 or edad > 120:
+        raise ErrorValidacion(
+            "La edad debe estar entre 0 y 120."
+        )
+
+    # Validación de nombre
 
     if not isinstance(registro["nombre"], str):
-        raise ErrorValidacion("El nombre debe ser texto.")
+        raise ErrorValidacion(
+            "El nombre debe ser texto."
+        )
 
     if not registro["nombre"].strip():
-        raise ErrorValidacion("El nombre no puede estar vacío.")
+        raise ErrorValidacion(
+            "El nombre no puede estar vacío."
+        )
 
-    if not isinstance(registro["edad"], int):
-        raise ErrorValidacion("La edad debe ser un número entero.")
+    # Validación de correo
 
-    if registro["edad"] < 0 or registro["edad"] > 120:
-        raise ErrorValidacion("La edad está fuera del rango permitido.")
+    correo = registro["correo"]
 
-    if not isinstance(registro["correo"], str):
-        raise ErrorValidacion("El correo debe ser texto.")
+    if not isinstance(correo, str):
+        raise ErrorValidacion(
+            "El correo debe ser texto."
+        )
 
-    if "@" not in registro["correo"] or "." not in registro["correo"]:
-        raise ErrorValidacion("El correo electrónico no es válido.")
+    if "@" not in correo or "." not in correo:
+        raise ErrorValidacion(
+            "El correo electrónico no es válido."
+        )
 
-    return True
+    # Retornar datos convertidos
+
+    registro["id"] = identificador
+    registro["edad"] = edad
+
+    return registro
 
 
-# ==========================================
-# 5. PROCESAMIENTO Y CONTINUIDAD POR REGISTRO
-# ==========================================
+# ==================================================
+# SEMANA 12
+# CAPTURA, CLASIFICACIÓN Y REPORTE DE ERRORES
+# ==================================================
+
+
+# 4. CONSTRUCCIÓN DEL REPORTE DE ERRORES
+
+def crear_reporte_error(origen, identificador, mensaje,
+                        categoria="PROCESAMIENTO"):
+
+    return {
+        "origen": origen,
+        "identificador": identificador,
+        "mensaje": str(mensaje),
+        "categoria": str(categoria).strip().upper(),
+        "fecha_hora": datetime.now().astimezone().isoformat(),
+    }
+
+
+# 5. PROCESAMIENTO CON CONTINUIDAD POR REGISTRO
 
 def procesar_registros(registros, origen="FUENTE_DATOS"):
 
@@ -126,20 +179,28 @@ def procesar_registros(registros, origen="FUENTE_DATOS"):
 
     for posicion, registro in enumerate(registros, start=1):
 
-        identificador = (
-            registro.get("id", f"REGISTRO_{posicion}")
-            if isinstance(registro, dict)
-            else f"REGISTRO_{posicion}"
-        )
+        # Obtener identificador del registro
+
+        if isinstance(registro, dict):
+            identificador = registro.get(
+                "id", f"REGISTRO_{posicion}"
+            )
+        else:
+            identificador = f"REGISTRO_{posicion}"
 
         try:
-            # Validar el registro individual
-            validar_registro(registro)
+            # Validar y convertir el registro
 
-            # Si pasa las validaciones, se procesa
-            registros_correctos.append(registro)
+            registro_validado = validar_registro(registro)
 
-            print(f"Registro {identificador}: PROCESADO CORRECTAMENTE")
+            # Guardar registro correcto
+
+            registros_correctos.append(registro_validado)
+
+            print(
+                f"Registro {identificador}: "
+                "PROCESADO CORRECTAMENTE"
+            )
 
         except ErrorValidacion as error:
 
@@ -152,7 +213,10 @@ def procesar_registros(registros, origen="FUENTE_DATOS"):
                 )
             )
 
-            print(f"Registro {identificador}: ERROR DE VALIDACIÓN")
+            print(
+                f"Registro {identificador}: "
+                "ERROR DE VALIDACIÓN"
+            )
 
         except ErrorFormatoFuente as error:
 
@@ -165,7 +229,10 @@ def procesar_registros(registros, origen="FUENTE_DATOS"):
                 )
             )
 
-            print(f"Registro {identificador}: ERROR DE FORMATO")
+            print(
+                f"Registro {identificador}: "
+                "ERROR DE FORMATO"
+            )
 
         except DataLabError as error:
 
@@ -178,7 +245,10 @@ def procesar_registros(registros, origen="FUENTE_DATOS"):
                 )
             )
 
-            print(f"Registro {identificador}: ERROR DE PROCESAMIENTO")
+            print(
+                f"Registro {identificador}: "
+                "ERROR DE PROCESAMIENTO"
+            )
 
         except Exception as error:
 
@@ -191,22 +261,23 @@ def procesar_registros(registros, origen="FUENTE_DATOS"):
                 )
             )
 
-            print(f"Registro {identificador}: ERROR INESPERADO")
+            print(
+                f"Registro {identificador}: "
+                "ERROR INESPERADO"
+            )
 
         # El ciclo continúa con el siguiente registro
 
     return registros_correctos, reportes_errores
 
 
-# ==========================================
-# 6. GENERACIÓN DEL REPORTE FINAL
-# ==========================================
+# 6. GENERACIÓN Y ALMACENAMIENTO DEL REPORTE
 
 def mostrar_resultados(correctos, errores):
 
     print("\n========== RESUMEN DEL PROCESAMIENTO ==========")
 
-    print(f"Registros procesados correctamente: {len(correctos)}")
+    print(f"Registros correctos: {len(correctos)}")
     print(f"Registros con errores: {len(errores)}")
 
     print("\n========== REGISTROS CORRECTOS ==========")
@@ -217,27 +288,39 @@ def mostrar_resultados(correctos, errores):
     print("\n========== REPORTE DE ERRORES ==========")
 
     for reporte in errores:
-        print(json.dumps(reporte, indent=4, ensure_ascii=False))
-
-    # Guardar los errores en un archivo JSON
-    with open("reporte_errores.json", "w", encoding="utf-8") as archivo:
-        json.dump(
-            errores,
-            archivo,
+        print(json.dumps(
+            reporte,
             indent=4,
             ensure_ascii=False
-        )
+        ))
 
-    print("\nReporte guardado en reporte_errores.json")
+    try:
+        with open(
+            "reporte_errores.json",
+            "w",
+            encoding="utf-8"
+        ) as archivo:
+
+            json.dump(
+                errores,
+                archivo,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        print("\nReporte guardado correctamente.")
+
+    except OSError as error:
+        print(f"Error al guardar el reporte: {error}")
 
 
-# ==========================================
-# 7. EJECUCIÓN PRINCIPAL
-# ==========================================
+# ==================================================
+# EJECUCIÓN PRINCIPAL DEL PROGRAMA
+# ==================================================
 
 def main():
 
-    # Datos de prueba: registros correctos e incorrectos
+    # Datos de prueba
 
     registros = [
         {
@@ -271,7 +354,8 @@ def main():
         {
             "id": 5,
             "nombre": "Pedro",
-            "edad": 25
+            "edad": "veinticinco",
+            "correo": "pedro@gmail.com"
         },
 
         "Registro con estructura incorrecta",
@@ -286,10 +370,17 @@ def main():
 
     print("INICIANDO PROCESAMIENTO DE DATOS...\n")
 
+    # Procesamiento de registros
+
     correctos, errores = procesar_registros(registros)
+
+    # Mostrar resultados y generar reporte
 
     mostrar_resultados(correctos, errores)
 
 
+# Ejecutar programa
+
 if __name__ == "__main__":
     main()
+
