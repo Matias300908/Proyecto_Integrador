@@ -6,6 +6,25 @@ Semana 10-12: integración con validación y excepciones.
 Semana 13: refactorización del procesamiento y trazabilidad.
 
 La clasificación permanece centralizada en clasificacion.py.
+
+REVISIÓN (semanas 10–12) — resumen de cambios. Busque "# REVISIÓN":
+  B-1  Cada fila queda en UNA sola bandeja: válidos, inválidos o errores.
+       Antes un error técnico se agregaba a "errores" Y a
+       "registros_invalidos"; la interfaz suma las tres bandejas para
+       mostrar "Recibidos", así que el total quedaba inflado.
+  B-2  Se detectan los eventos técnicos del sensor (columna
+       observacion_tecnica = SIMULACION_*) y las filas que el lector marcó
+       con "_error_tecnico". Antes terminaban como válidos o como inválidos
+       con motivos engañosos ("falta tipo, valor, unidad").
+  B-4  Dos bloques except: DataLabError (errores previstos, la categoría
+       sale de error.CATEGORIA) y Exception (red de seguridad, "SISTEMA").
+       Antes la categoría era el nombre de la etapa (NORMALIZACION...).
+  B-5  La conversión a float lanza ErrorConversion "from exc", que conserva
+       el error original como causa.
+  B-6  Una entrada que no es lista (un dict, un texto) se reporta como
+       error en lugar de recorrerse carácter por carácter.
+  Lo marcado como "SEMANA 13" (trazabilidad, lote_id) se conservó tal cual;
+  no forma parte de esta revisión (semanas 10 a 12).
 """
 
 from datetime import datetime
@@ -13,9 +32,19 @@ from uuid import uuid4
 
 from src.processing.clasificacion import clasificar_valor
 from src.processing.resumen import generar_resumen
-from src.exceptions.errores import crear_reporte_error
+from src.exceptions.errores import (
+    DataLabError,
+    ErrorConversion,
+    ErrorEstructuraRegistro,
+    ErrorEventoSensor,
+    EVENTOS_TECNICOS,
+    crear_reporte_error,
+)
 from src.validation.normalizacion import normalizar_registro
 from src.validation.validaciones import validar_registro
+
+# REVISIÓN: origen por defecto de los reportes de error del lote.
+ORIGEN_LOTE = "PROCESAMIENTO"
 
 
 # ==================================================
@@ -45,10 +74,48 @@ def registrar_evento(trazabilidad, lote_id, registro_id,
 
 def obtener_identificador(registro, posicion):
 
-    if isinstance(registro, dict):
-        return registro.get("id", f"REGISTRO_{posicion}")
+    # REVISIÓN: también se usa el id cuando viene vacío o None
+    # (p. ej. una fila irregular sin id) -> se cae al número de posición.
+    if isinstance(registro, dict) and registro.get("id") not in (None, ""):
+        return registro["id"]
 
     return f"REGISTRO_{posicion}"
+
+
+# ==================================================
+# REVISIÓN B-2 (semanas 11–12)
+# REVISIÓN TÉCNICA ANTES DE LA CALIDAD
+# ==================================================
+
+def _revisar_eventos_tecnicos(registro):
+    """Lanza una excepción si el registro trae una falla TÉCNICA del origen.
+
+    Diferencia clave para la sustentación:
+      - Dato de MALA CALIDAD (Rol A)  -> registros_invalidos, con motivos.
+      - FALLA TÉCNICA del origen (B)  -> errores, con categoría.
+    """
+    # Un elemento que no es diccionario no puede normalizarse ni validarse.
+    if not isinstance(registro, dict):
+        raise ErrorEstructuraRegistro(
+            f"El registro no es un diccionario sino {type(registro).__name__}: {registro!r}"
+        )
+
+    # El Rol C marca así las filas con columnas de más o de menos.
+    if "_error_tecnico" in registro:
+        fila = registro.get("_fila", "?")
+        origen = registro.get("_origen", "fuente")
+        raise ErrorEstructuraRegistro(
+            f"{registro['_error_tecnico']} ({origen}, fila {fila})"
+        )
+
+    # Eventos simulados en la columna observacion_tecnica de los datasets.
+    evento = registro.get("observacion_tecnica")
+    if isinstance(evento, str) and evento.strip().upper().startswith("SIMULACION_"):
+        clave = evento.strip().upper()
+        # .get(clave, ErrorEventoSensor): un evento nuevo que no está en la
+        # tabla usa la clase general en lugar de romper el procesamiento.
+        clase_error = EVENTOS_TECNICOS.get(clave, ErrorEventoSensor)
+        raise clase_error(f"Evento técnico del sensor: {clave}")
 
 
 # ==================================================
@@ -67,6 +134,12 @@ def procesar_registro(registro, posicion, lote_id, trazabilidad):
     )
 
     try:
+
+        # REVISIÓN B-2: REVISIÓN TÉCNICA (estructura y eventos del sensor)
+
+        etapa = "REVISION_TECNICA"
+
+        _revisar_eventos_tecnicos(registro)
 
         # NORMALIZACIÓN
 
@@ -92,6 +165,7 @@ def procesar_registro(registro, posicion, lote_id, trazabilidad):
                 etapa, "RECHAZADO", motivos
             )
 
+            # Formato que lee la interfaz: {"registro": ..., "motivos": [...]}.
             return {
                 "estado": "INVALIDO",
                 "registro": registro_normalizado,
@@ -107,7 +181,16 @@ def procesar_registro(registro, posicion, lote_id, trazabilidad):
 
         etapa = "CONVERSION"
 
-        valor = float(registro_normalizado["valor"])
+        # REVISIÓN B-5: si la conversión falla se lanza la excepción propia
+        # del proyecto. "from exc" guarda el error original como causa
+        # (se ve en el traceback como "The above exception was the direct
+        # cause of..."), útil para depurar.
+        try:
+            valor = float(registro_normalizado["valor"])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ErrorConversion(
+                f"No se pudo convertir el valor {registro_normalizado.get('valor')!r} a número"
+            ) from exc
         registro_normalizado["valor"] = valor
 
         registrar_evento(
@@ -143,27 +226,42 @@ def procesar_registro(registro, posicion, lote_id, trazabilidad):
             "motivos": []
         }
 
-    except Exception as exc:
-
-        # CAPTURA Y REPORTE DEL ERROR
+    # REVISIÓN B-4: primero los errores PREVISTOS del proyecto. La categoría
+    # la sabe la propia excepción (atributo de clase CATEGORIA).
+    except DataLabError as exc:
 
         registrar_evento(
             trazabilidad, lote_id, identificador,
             etapa, "ERROR", str(exc)
         )
 
-        reporte = crear_reporte_error(
-            "PROCESAMIENTO",
-            identificador,
-            str(exc),
-            etapa
+        return {
+            "estado": "ERROR",
+            "registro": registro,
+            "motivos": [str(exc)],
+            "reporte": crear_reporte_error(
+                ORIGEN_LOTE, identificador, exc, exc.CATEGORIA
+            )
+        }
+
+    # REVISIÓN B-4: red de seguridad para lo IMPREVISTO. El orden importa:
+    # si este bloque fuera primero, capturaría también los DataLabError.
+    except Exception as exc:
+
+        registrar_evento(
+            trazabilidad, lote_id, identificador,
+            etapa, "ERROR", str(exc)
         )
 
         return {
             "estado": "ERROR",
             "registro": registro,
             "motivos": [str(exc)],
-            "reporte": reporte
+            "reporte": crear_reporte_error(
+                ORIGEN_LOTE, identificador,
+                f"Error inesperado en la etapa {etapa}: {type(exc).__name__}: {exc}",
+                "SISTEMA"
+            )
         }
 
 
@@ -180,10 +278,24 @@ def procesar_registros(registros):
         "registros_invalidos": [],
         "errores": [],
         "trazabilidad": [],
-        "resumen": {}
+        # REVISIÓN: el resumen siempre tiene las mismas claves (total 0,
+        # promedio 0.0...) aunque el lote esté vacío o falle por completo.
+        "resumen": generar_resumen([])
     }
 
     if registros is None:
+        return resultado
+
+    # REVISIÓN B-6: un str también se puede recorrer con for (letra por letra)
+    # y un dict recorrería sus claves. Se exige una lista o tupla.
+    if not isinstance(registros, (list, tuple)):
+        resultado["errores"].append(
+            crear_reporte_error(
+                ORIGEN_LOTE, "N/A",
+                f"Se esperaba una lista de registros y se recibió {type(registros).__name__}",
+                ErrorEstructuraRegistro.CATEGORIA
+            )
+        )
         return resultado
 
     lote_id = resultado["lote_id"]
@@ -191,8 +303,6 @@ def procesar_registros(registros):
     # PROCESAMIENTO INDEPENDIENTE DE CADA REGISTRO
 
     for posicion, registro in enumerate(registros, start=1):
-
-        identificador = obtener_identificador(registro, posicion)
 
         procesado = procesar_registro(
             registro,
@@ -216,16 +326,14 @@ def procesar_registros(registros):
 
         else:
 
+            # REVISIÓN B-1: un error técnico va SOLO a "errores".
+            # Antes también se agregaba a "registros_invalidos" y el registro
+            # se contaba dos veces (válidos + inválidos + errores > filas).
             resultado["errores"].append(
                 procesado["reporte"]
             )
 
-            resultado["registros_invalidos"].append({
-                "registro": procesado["registro"],
-                "motivos": procesado["motivos"]
-            })
-
-        # El ciclo continúa con el siguiente registro.
+        # El ciclo continúa con el siguiente registro (B-S11-04).
 
     # GENERACIÓN DEL RESUMEN
 
@@ -239,7 +347,7 @@ def procesar_registros(registros):
 
         resultado["errores"].append(
             crear_reporte_error(
-                "PROCESAMIENTO",
+                ORIGEN_LOTE,
                 None,
                 str(exc),
                 "RESUMEN"
@@ -312,4 +420,3 @@ def mostrar_resultados(resultado):
         print(error)
 
     mostrar_trazabilidad(resultado)
-
