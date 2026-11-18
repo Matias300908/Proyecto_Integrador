@@ -1,386 +1,110 @@
+"""Rol B: excepciones y registro de incidencias.
 
+REVISIÓN (semanas 11–12) — resumen de cambios. Busque "# REVISIÓN":
+  B-3  Se eliminó el código de OTRO ejercicio que estaba en este archivo:
+       leer_fuente(), validar_registro() y procesar_registros() para
+       registros de personas (nombre, edad, correo), mostrar_resultados()
+       que escribía reporte_errores.json y un main() con datos de prueba.
+       Ese código no pertenece a DataLab y además repetía los nombres de
+       las funciones de los contratos de los roles A y B
+       (validar_registro, procesar_registros), lo que confunde a quien
+       lee e importa. Git conserva la versión anterior (commit da42b86).
+  B-4  Cada excepción declara su CATEGORIA como atributo de clase. El
+       procesamiento ya no necesita cadenas if/elif para saber qué
+       categoría reportar: le pregunta al propio error (error.CATEGORIA).
+  B-5  Nuevas excepciones para los eventos técnicos de los datasets
+       (columna observacion_tecnica), para filas con estructura rota y
+       para fallas de conversión.
+"""
 from datetime import datetime
-import json
 
 
-# ==================================================
-# SEMANA 11
-# EXCEPCIONES, LECTURA Y CONVERSIÓN DE DATOS
-# ==================================================
-
-
-# 1. DEFINICIÓN DE EXCEPCIONES
+# --------------------------------------------------------------------------
+# Jerarquía de excepciones
+# --------------------------------------------------------------------------
+# REVISIÓN B-4: las subclases heredan CATEGORIA o la redefinen. Así
+# "except DataLabError as error" captura todas y error.CATEGORIA dice cuál fue.
 
 class DataLabError(Exception):
     """Excepción base de la aplicación."""
+    CATEGORIA = "PROCESAMIENTO"
 
 
 class ErrorValidacion(DataLabError):
     """El registro no cumple las reglas de calidad."""
+    CATEGORIA = "VALIDACION"
+
+
+class ErrorConversion(DataLabError):
+    # REVISIÓN B-5: antes un fallo de float() terminaba como error genérico.
+    """No fue posible convertir un campo al tipo esperado (p. ej. valor a float)."""
+    CATEGORIA = "CONVERSION"
 
 
 class ErrorFormatoFuente(DataLabError):
     """La estructura de entrada no corresponde al contrato esperado."""
+    CATEGORIA = "FORMATO"
+
+
+class ErrorEstructuraRegistro(ErrorFormatoFuente):
+    # REVISIÓN B-5: un elemento que no es diccionario (None, un texto suelto)
+    # o una fila que el lector marcó con "_error_tecnico".
+    """Un registro individual llegó con una estructura que no se puede procesar."""
+    CATEGORIA = "ESTRUCTURA_REGISTRO"
 
 
 class ErrorLecturaFuente(DataLabError):
     """No fue posible leer una fuente de datos."""
+    CATEGORIA = "LECTURA"
 
 
-# 2. LECTURA CONTROLADA DE LA FUENTE
-
-def leer_fuente(ruta):
-
-    try:
-        with open(ruta, "r", encoding="utf-8") as archivo:
-            contenido = archivo.read()
-
-        if not contenido.strip():
-            raise ErrorFormatoFuente("El archivo está vacío.")
-
-        try:
-            datos = json.loads(contenido)
-
-        except json.JSONDecodeError as error:
-            raise ErrorFormatoFuente(
-                f"El archivo JSON tiene un formato incorrecto: {error}"
-            ) from error
-
-        if not isinstance(datos, list):
-            raise ErrorFormatoFuente(
-                "La fuente debe contener una lista de registros."
-            )
-
-        return datos
-
-    except FileNotFoundError as error:
-        raise ErrorLecturaFuente(
-            f"No se encontró el archivo: {ruta}"
-        ) from error
-
-    except PermissionError as error:
-        raise ErrorLecturaFuente(
-            "No hay permisos para leer el archivo."
-        ) from error
-
-    except UnicodeDecodeError as error:
-        raise ErrorLecturaFuente(
-            "El archivo tiene una codificación incorrecta."
-        ) from error
-
-    except OSError as error:
-        raise ErrorLecturaFuente(
-            f"No fue posible leer el archivo: {error}"
-        ) from error
+class ErrorEventoSensor(DataLabError):
+    # REVISIÓN B-5: falla TÉCNICA reportada por el origen (no es mala calidad
+    # del dato). Va a "errores", no a "registros_invalidos".
+    """El sensor reportó un evento técnico durante la lectura."""
+    CATEGORIA = "EVENTO_SENSOR"
 
 
-# 3. CONVERSIÓN Y VALIDACIÓN DE CADA REGISTRO
-
-def validar_registro(registro):
-
-    if not isinstance(registro, dict):
-        raise ErrorFormatoFuente(
-            "El registro debe ser un diccionario."
-        )
-
-    campos = ["id", "nombre", "edad", "correo"]
-
-    for campo in campos:
-        if campo not in registro:
-            raise ErrorFormatoFuente(
-                f"Falta el campo obligatorio: {campo}"
-            )
-
-    # Conversión de datos
-
-    try:
-        identificador = int(registro["id"])
-        edad = int(registro["edad"])
-
-    except (ValueError, TypeError) as error:
-        raise ErrorValidacion(
-            f"Error al convertir los datos: {error}"
-        ) from error
-
-    # Validación de identificador
-
-    if identificador <= 0:
-        raise ErrorValidacion(
-            "El identificador debe ser positivo."
-        )
-
-    # Validación de edad
-
-    if edad < 0 or edad > 120:
-        raise ErrorValidacion(
-            "La edad debe estar entre 0 y 120."
-        )
-
-    # Validación de nombre
-
-    if not isinstance(registro["nombre"], str):
-        raise ErrorValidacion(
-            "El nombre debe ser texto."
-        )
-
-    if not registro["nombre"].strip():
-        raise ErrorValidacion(
-            "El nombre no puede estar vacío."
-        )
-
-    # Validación de correo
-
-    correo = registro["correo"]
-
-    if not isinstance(correo, str):
-        raise ErrorValidacion(
-            "El correo debe ser texto."
-        )
-
-    if "@" not in correo or "." not in correo:
-        raise ErrorValidacion(
-            "El correo electrónico no es válido."
-        )
-
-    # Retornar datos convertidos
-
-    registro["id"] = identificador
-    registro["edad"] = edad
-
-    return registro
+class ErrorTimeoutSensor(ErrorEventoSensor):
+    """El sensor no respondió a tiempo."""
+    CATEGORIA = "TIMEOUT_SENSOR"
 
 
-# ==================================================
-# SEMANA 12
-# CAPTURA, CLASIFICACIÓN Y REPORTE DE ERRORES
-# ==================================================
+class ErrorPaqueteIncompleto(ErrorEventoSensor):
+    """El paquete de datos del sensor llegó incompleto."""
+    CATEGORIA = "PAQUETE_INCOMPLETO"
 
 
-# 4. CONSTRUCCIÓN DEL REPORTE DE ERRORES
+class ErrorLecturaIntermitente(ErrorEventoSensor):
+    """La lectura del sensor fue intermitente."""
+    CATEGORIA = "LECTURA_INTERMITENTE"
 
-def crear_reporte_error(origen, identificador, mensaje,
-                        categoria="PROCESAMIENTO"):
 
+# REVISIÓN B-5: tabla "texto del evento -> clase de excepción". Agregar un
+# evento nuevo es agregar una línea; el ciclo de procesamiento no cambia.
+EVENTOS_TECNICOS = {
+    "SIMULACION_TIMEOUT_SENSOR": ErrorTimeoutSensor,
+    "SIMULACION_PAQUETE_INCOMPLETO": ErrorPaqueteIncompleto,
+    "SIMULACION_LECTURA_INTERMITENTE": ErrorLecturaIntermitente,
+}
+
+
+# --------------------------------------------------------------------------
+# Reporte de errores (B-S11-01 y B-S11-02)
+# --------------------------------------------------------------------------
+def crear_reporte_error(origen, identificador, mensaje, categoria="PROCESAMIENTO"):
+    """Construye una incidencia serializable con el contexto original del error.
+
+    Las claves (origen, identificador, mensaje, categoria, fecha_hora) son las
+    que muestra y descarga la pestaña de errores técnicos de la interfaz.
+    """
     return {
         "origen": origen,
         "identificador": identificador,
+        # str(mensaje) conserva el texto original de la excepción (B-S11-02).
         "mensaje": str(mensaje),
         "categoria": str(categoria).strip().upper(),
-        "fecha_hora": datetime.now().astimezone().isoformat(),
+        # REVISIÓN: timespec="seconds" quita los microsegundos; la fecha se lee
+        # mejor en la tabla y en el CSV descargado.
+        "fecha_hora": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
-
-
-# 5. PROCESAMIENTO CON CONTINUIDAD POR REGISTRO
-
-def procesar_registros(registros, origen="FUENTE_DATOS"):
-
-    registros_correctos = []
-    reportes_errores = []
-
-    for posicion, registro in enumerate(registros, start=1):
-
-        # Obtener identificador del registro
-
-        if isinstance(registro, dict):
-            identificador = registro.get(
-                "id", f"REGISTRO_{posicion}"
-            )
-        else:
-            identificador = f"REGISTRO_{posicion}"
-
-        try:
-            # Validar y convertir el registro
-
-            registro_validado = validar_registro(registro)
-
-            # Guardar registro correcto
-
-            registros_correctos.append(registro_validado)
-
-            print(
-                f"Registro {identificador}: "
-                "PROCESADO CORRECTAMENTE"
-            )
-
-        except ErrorValidacion as error:
-
-            reportes_errores.append(
-                crear_reporte_error(
-                    origen,
-                    identificador,
-                    error,
-                    "VALIDACION"
-                )
-            )
-
-            print(
-                f"Registro {identificador}: "
-                "ERROR DE VALIDACIÓN"
-            )
-
-        except ErrorFormatoFuente as error:
-
-            reportes_errores.append(
-                crear_reporte_error(
-                    origen,
-                    identificador,
-                    error,
-                    "FORMATO"
-                )
-            )
-
-            print(
-                f"Registro {identificador}: "
-                "ERROR DE FORMATO"
-            )
-
-        except DataLabError as error:
-
-            reportes_errores.append(
-                crear_reporte_error(
-                    origen,
-                    identificador,
-                    error,
-                    "PROCESAMIENTO"
-                )
-            )
-
-            print(
-                f"Registro {identificador}: "
-                "ERROR DE PROCESAMIENTO"
-            )
-
-        except Exception as error:
-
-            reportes_errores.append(
-                crear_reporte_error(
-                    origen,
-                    identificador,
-                    error,
-                    "ERROR_INESPERADO"
-                )
-            )
-
-            print(
-                f"Registro {identificador}: "
-                "ERROR INESPERADO"
-            )
-
-        # El ciclo continúa con el siguiente registro
-
-    return registros_correctos, reportes_errores
-
-
-# 6. GENERACIÓN Y ALMACENAMIENTO DEL REPORTE
-
-def mostrar_resultados(correctos, errores):
-
-    print("\n========== RESUMEN DEL PROCESAMIENTO ==========")
-
-    print(f"Registros correctos: {len(correctos)}")
-    print(f"Registros con errores: {len(errores)}")
-
-    print("\n========== REGISTROS CORRECTOS ==========")
-
-    for registro in correctos:
-        print(registro)
-
-    print("\n========== REPORTE DE ERRORES ==========")
-
-    for reporte in errores:
-        print(json.dumps(
-            reporte,
-            indent=4,
-            ensure_ascii=False
-        ))
-
-    try:
-        with open(
-            "reporte_errores.json",
-            "w",
-            encoding="utf-8"
-        ) as archivo:
-
-            json.dump(
-                errores,
-                archivo,
-                indent=4,
-                ensure_ascii=False
-            )
-
-        print("\nReporte guardado correctamente.")
-
-    except OSError as error:
-        print(f"Error al guardar el reporte: {error}")
-
-
-# ==================================================
-# EJECUCIÓN PRINCIPAL DEL PROGRAMA
-# ==================================================
-
-def main():
-
-    # Datos de prueba
-
-    registros = [
-        {
-            "id": 1,
-            "nombre": "Laura",
-            "edad": 20,
-            "correo": "laura@gmail.com"
-        },
-
-        {
-            "id": 2,
-            "nombre": "Carlos",
-            "edad": -5,
-            "correo": "carlos@gmail.com"
-        },
-
-        {
-            "id": 3,
-            "nombre": "Andrés",
-            "edad": 22,
-            "correo": "andresgmail.com"
-        },
-
-        {
-            "id": 4,
-            "nombre": "María",
-            "edad": 19,
-            "correo": "maria@gmail.com"
-        },
-
-        {
-            "id": 5,
-            "nombre": "Pedro",
-            "edad": "veinticinco",
-            "correo": "pedro@gmail.com"
-        },
-
-        "Registro con estructura incorrecta",
-
-        {
-            "id": 7,
-            "nombre": "Sofía",
-            "edad": 21,
-            "correo": "sofia@gmail.com"
-        }
-    ]
-
-    print("INICIANDO PROCESAMIENTO DE DATOS...\n")
-
-    # Procesamiento de registros
-
-    correctos, errores = procesar_registros(registros)
-
-    # Mostrar resultados y generar reporte
-
-    mostrar_resultados(correctos, errores)
-
-
-# Ejecutar programa
-
-if __name__ == "__main__":
-    main()
-
